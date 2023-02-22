@@ -1,0 +1,8 @@
+__title__ = 'apper'
+__description__ = 'Fusion 360 API for humans'
+__url__ = 'https://apper.readthedocs.io'
+__version__ = '0.0.1'
+__author__ = 'Stevan Stajio'
+__author_email__ = 'stevanstajo492@gmail.com'
+__license__ = 'Apache 2.0'
+__copyright__ = 'Copyright 2023 Stevan Stajio'
