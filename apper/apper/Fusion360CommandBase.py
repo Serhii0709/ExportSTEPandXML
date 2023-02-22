@@ -6,7 +6,7 @@ Python module for creating a Fusion 360 Command
 :copyright: (c) 2019 by Patrick Rainsberry.
 :license: Apache 2.0, see LICENSE for more details.
 """
-import traceback
+import traceback, tempfile
 
 import adsk.core
 import adsk.fusion
@@ -294,71 +294,74 @@ class Fusion360CommandBase:
         ui = app.userInterface
 
         try:
-            if self.command_in_nav_bar:
-                toolbars = ui.toolbars
-                nav_bar = toolbars.itemById('NavToolbar')
-                controls = nav_bar.controls
-            elif self.command_in_qat_bar:
-                toolbars = ui.toolbars
-                qat_bar = toolbars.itemById('QAT')
-                controls = qat_bar.controls
-            else:
-                all_workspaces = ui.workspaces
-                this_workspace = all_workspaces.itemById(self.workspace)
-                if this_workspace is None:
-                    ui.messageBox(self.workspace + ' is not a valid workspace')
-                    raise ValueError
+            product = app.activeProduct
+            design = adsk.fusion.Design.cast(product)
+            title = 'Extract BOM'
+            if not design:
+                ui.messageBox('No active design', title)
+                return
+            # Get all occurrences in the root component of the active design
+            root = design.rootComponent
+            occs = root.allOccurrences
+            
+            # Gather information about each unique component
+            bom = []
+            for occ in occs:
+                comp = occ.component
+                jj = 0
+                for bomI in bom:
+                    if bomI['component'] == comp:
+                        # Increment the instance count of the existing row.
+                        bomI['instances'] += 1
+                        break
+                    jj += 1
 
-                # Add to existing Toolbar Tab or create a new one
-                all_toolbar_tabs = this_workspace.toolbarTabs
-                toolbar_tab = all_toolbar_tabs.itemById(self.toolbar_tab_id)
-                if toolbar_tab is None:
-                    toolbar_tab = all_toolbar_tabs.add(self.toolbar_tab_id, self.toolbar_tab_name)
-                    toolbar_tab.activate()
-                    self.fusion_app.tabs.append(toolbar_tab)
+                if jj == len(bom):
+                    # Gather any BOM worthy values from the component
+                    volume = 0
+                    bodies = comp.bRepBodies
+                    for bodyK in bodies:
+                        if bodyK.isSolid:
+                            volume += bodyK.volume
+                    
+                    # Add this component to the BOM
+                    bom.append({
+                        'component': comp,
+                        'name': comp.name,
+                        'instances': 1,
+                        'volume': volume
+                    })
 
-                # Add to existing Toolbar Panel or create a new one
-                all_toolbar_panels = toolbar_tab.toolbarPanels
-                toolbar_panel = all_toolbar_panels.itemById(self.toolbar_panel_id)
-                if toolbar_panel is None:
-                    toolbar_panel = all_toolbar_panels.add(self.toolbar_panel_id, self.toolbar_panel_id)
+            # Display the BOM
+            title = spacePadRight('Name', 25) + spacePadRight('Instances', 15) + 'Volume\n'
+            msg = title + '\n' + walkThrough(bom)
+            
+            ui.messageBox(msg, 'Bill Of Materials')
+            # Get the ExportManager from the active design.
+            exportMgr = product.exportManager
+            
+            tmpDir = tempfile.gettempdir()
 
-                # Controls for the defined panel
-                controls = toolbar_panel.controls
-
-            # If adding to drop down, find or create dropdown in parent
-            if self.add_to_drop_down:
-                drop_control = controls.itemById(self.drop_down_cmd_id)
-                if not drop_control:
-                    drop_control = controls.addDropDown(
-                        self.drop_down_name,
-                        self.drop_down_resources,
-                        self.drop_down_cmd_id)
-                controls = drop_control.controls
-
-            # Create the command definition
-            self.command_definition = ui.commandDefinitions.itemById(self.cmd_id)
-            if not self.command_definition:
-                self.command_definition = ui.commandDefinitions.addButtonDefinition(
-                    self.cmd_id,
-                    self.cmd_name,
-                    self.cmd_description,
-                    self.cmd_resources
-                )
-                on_command_created_handler = self._get_create_event()
-                self.command_definition.commandCreated.add(on_command_created_handler)
-                create_handlers.append(on_command_created_handler)
-
-            # Create the new control
-            self.control = controls.itemById(self.cmd_ctrl_id)
-            if not self.control:
-                self.control = controls.addCommand(self.command_definition)
-                self.control.isVisible = self.command_visible
-                if self.command_promoted:
-                    self.control.isPromoted = self.command_promoted
-
-            # TODO this is broken for some reason.  No access to ui in the run method?
-            # self.command_definition.controlDefinition.isEnabled = self.command_enabled
+            # Create an IgesExportOptions object and do the export.
+            igesOptions = exportMgr.createIGESExportOptions(tmpDir + '/test.igs')
+            res = exportMgr.execute(igesOptions)
+            
+            # Create an STEPExportOptions object and do the export.
+            stepOptions = exportMgr.createSTEPExportOptions(tmpDir+ '/test.step')
+            res = exportMgr.execute(stepOptions)
+            
+            # Create a SATExportOptions object and do the export.
+            satOptions = exportMgr.createSATExportOptions(tmpDir + '/test.sat')
+            res = exportMgr.execute(satOptions)
+            
+            # Create a SMTExportOptions object and do the export.
+            smtOptions = exportMgr.createSMTExportOptions(tmpDir + '/test.smt')
+            res = exportMgr.execute(smtOptions)
+            
+            # Create a FusionArchiveExportOptions object and do the export.
+            fusionArchivevOptions = exportMgr.createFusionArchiveExportOptions(tmpDir + '/test.f3d')
+            res = exportMgr.execute(fusionArchivevOptions)
+            ui.messageBox(f'Design exported to: {tmpDir}')
 
         except:
             if ui:
@@ -366,7 +369,23 @@ class Fusion360CommandBase:
                     self.__class__.__name__,
                     traceback.format_exc()
                 ))
+    def spacePadRight(value, length):
+        pad = ''
+        if type(value) is str:
+            paddingLength = length - len(value) + 1
+        else:
+            paddingLength = length - value + 1
+        while paddingLength > 0:
+            pad += ' '
+            paddingLength -= 1
 
+        return str(value) + pad
+
+    def walkThrough(bom):
+        mStr = ''
+        for item in bom:
+            mStr += spacePadRight(item['name'], 25) + str(spacePadRight(item['instances'], 15)) + str(item['volume']) + '\n'
+        return mStr
     def on_stop(self):
         """Function is run when the addin stops.
 
